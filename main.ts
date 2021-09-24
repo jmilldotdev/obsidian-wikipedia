@@ -1,112 +1,122 @@
-import { App, Modal, Notice, Plugin, PluginSettingTab, Setting } from 'obsidian';
+import {
+  App,
+  Modal,
+  Notice,
+  Plugin,
+  PluginSettingTab,
+  Setting,
+  Editor,
+  MarkdownView,
+} from "obsidian";
+
+interface WikiExtract {
+  title: string;
+  text: string;
+}
 
 interface MyPluginSettings {
-	mySetting: string;
+  mySetting: string;
 }
 
 const DEFAULT_SETTINGS: MyPluginSettings = {
-	mySetting: 'default'
-}
+  mySetting: "default",
+};
+
+const apiUrl =
+  "https://en.wikipedia.org/w/api.php?format=json&action=query&prop=extracts&explaintext=1&origin=*&titles=";
 
 export default class MyPlugin extends Plugin {
-	settings: MyPluginSettings;
+  settings: MyPluginSettings;
 
-	async onload() {
-		console.log('loading plugin');
+  parseResponse(json: any) {
+    const pages = json.query.pages;
+    const extracts: WikiExtract[] = Object.keys(pages).map((key) => {
+      const page = pages[key];
+      const extract: WikiExtract = {
+        title: page.title,
+        text: page.extract,
+      };
+      return extract;
+    });
+    return extracts;
+  }
 
-		await this.loadSettings();
+  async getWikipediaText(title: string) {
+    console.log("getting wiki response");
+    const url = apiUrl + encodeURIComponent(title);
+    const json = await fetch(url).then((response) => response.json());
+    const extracts = this.parseResponse(json);
+    return extracts[0];
+  }
 
-		this.addRibbonIcon('dice', 'Sample Plugin', () => {
-			new Notice('This is a notice!');
-		});
+  async getWikipediaTextForActiveFile() {
+    const activeNoteTitle = await this.app.workspace.getActiveFile().basename;
+    const extract: WikiExtract = await this.getWikipediaText(activeNoteTitle);
+    const formatted = extract.text.split("==")[0].trim();
+    const editor = this.getEditor();
+    editor.replaceSelection(formatted);
+  }
 
-		this.addStatusBarItem().setText('Status Bar Text');
+  async onload() {
+    console.log("loading plugin");
 
-		this.addCommand({
-			id: 'open-sample-modal',
-			name: 'Open Sample Modal',
-			// callback: () => {
-			// 	console.log('Simple Callback');
-			// },
-			checkCallback: (checking: boolean) => {
-				let leaf = this.app.workspace.activeLeaf;
-				if (leaf) {
-					if (!checking) {
-						new SampleModal(this.app).open();
-					}
-					return true;
-				}
-				return false;
-			}
-		});
+    await this.loadSettings();
 
-		this.addSettingTab(new SampleSettingTab(this.app, this));
+    this.addCommand({
+      id: "wikipedia-get-active-note-title",
+      name: "Wikipedia: Get Active Note Title",
+      callback: () => this.getWikipediaTextForActiveFile(),
+    });
 
-		this.registerCodeMirror((cm: CodeMirror.Editor) => {
-			console.log('codemirror', cm);
-		});
+    this.addSettingTab(new SampleSettingTab(this.app, this));
+  }
 
-		this.registerDomEvent(document, 'click', (evt: MouseEvent) => {
-			console.log('click', evt);
-		});
+  onunload() {
+    console.log("unloading plugin");
+  }
 
-		this.registerInterval(window.setInterval(() => console.log('setInterval'), 5 * 60 * 1000));
-	}
+  async loadSettings() {
+    this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+  }
 
-	onunload() {
-		console.log('unloading plugin');
-	}
+  async saveSettings() {
+    await this.saveData(this.settings);
+  }
 
-	async loadSettings() {
-		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
-	}
-
-	async saveSettings() {
-		await this.saveData(this.settings);
-	}
-}
-
-class SampleModal extends Modal {
-	constructor(app: App) {
-		super(app);
-	}
-
-	onOpen() {
-		let {contentEl} = this;
-		contentEl.setText('Woah!');
-	}
-
-	onClose() {
-		let {contentEl} = this;
-		contentEl.empty();
-	}
+  private getEditor(): Editor {
+    let activeLeaf = this.app.workspace.getActiveViewOfType(MarkdownView);
+    if (activeLeaf == null) return;
+    return activeLeaf.editor;
+  }
 }
 
 class SampleSettingTab extends PluginSettingTab {
-	plugin: MyPlugin;
+  plugin: MyPlugin;
 
-	constructor(app: App, plugin: MyPlugin) {
-		super(app, plugin);
-		this.plugin = plugin;
-	}
+  constructor(app: App, plugin: MyPlugin) {
+    super(app, plugin);
+    this.plugin = plugin;
+  }
 
-	display(): void {
-		let {containerEl} = this;
+  display(): void {
+    let { containerEl } = this;
 
-		containerEl.empty();
+    containerEl.empty();
 
-		containerEl.createEl('h2', {text: 'Settings for my awesome plugin.'});
+    containerEl.createEl("h2", { text: "Settings for my awesome plugin." });
 
-		new Setting(containerEl)
-			.setName('Setting #1')
-			.setDesc('It\'s a secret')
-			.addText(text => text
-				.setPlaceholder('Enter your secret')
-				.setValue('')
-				.onChange(async (value) => {
-					console.log('Secret: ' + value);
-					this.plugin.settings.mySetting = value;
-					await this.plugin.saveSettings();
-				}));
-	}
+    new Setting(containerEl)
+      .setName("Setting #1")
+      .setDesc("It's a secret")
+      .addText((text) =>
+        text
+          .setPlaceholder("Enter your secret")
+          .setValue("")
+          .onChange(async (value) => {
+            console.log("Secret: " + value);
+            this.plugin.settings.mySetting = value;
+            await this.plugin.saveSettings();
+          })
+      );
+  }
 }
