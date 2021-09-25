@@ -15,11 +15,11 @@ interface WikiExtract {
 }
 
 interface MyPluginSettings {
-  mySetting: string;
+  template: string;
 }
 
 const DEFAULT_SETTINGS: MyPluginSettings = {
-  mySetting: "default",
+  template: "{{text}}",
 };
 
 const apiUrl =
@@ -28,7 +28,7 @@ const apiUrl =
 export default class MyPlugin extends Plugin {
   settings: MyPluginSettings;
 
-  parseResponse(json: any) {
+  parseResponse(json: any): WikiExtract[] {
     const pages = json.query.pages;
     const extracts: WikiExtract[] = Object.keys(pages).map((key) => {
       const page = pages[key];
@@ -41,7 +41,17 @@ export default class MyPlugin extends Plugin {
     return extracts;
   }
 
-  async getWikipediaText(title: string) {
+  formatExtractInsert(extract: WikiExtract): string {
+    const formattedText = extract.text.split("==")[0].trim();
+    const template = this.settings.template;
+    const formattedTemplate = template
+      .replace("{{text}}", formattedText)
+      .replace("{{title}}", extract.title)
+      .replace("{{url}}", "https://wikipedia.org/Obsidian");
+    return formattedTemplate;
+  }
+
+  async getWikipediaText(title: string): Promise<WikiExtract> {
     console.log("getting wiki response");
     const url = apiUrl + encodeURIComponent(title);
     const json = await fetch(url).then((response) => response.json());
@@ -52,9 +62,8 @@ export default class MyPlugin extends Plugin {
   async getWikipediaTextForActiveFile() {
     const activeNoteTitle = await this.app.workspace.getActiveFile().basename;
     const extract: WikiExtract = await this.getWikipediaText(activeNoteTitle);
-    const formatted = extract.text.split("==")[0].trim();
     const editor = this.getEditor();
-    editor.replaceSelection(formatted);
+    editor.replaceSelection(this.formatExtractInsert(extract));
   }
 
   async onload() {
@@ -103,18 +112,20 @@ class SampleSettingTab extends PluginSettingTab {
 
     containerEl.empty();
 
-    containerEl.createEl("h2", { text: "Settings for my awesome plugin." });
+    containerEl.createEl("h2", { text: "Obsidian Wikipedia" });
 
     new Setting(containerEl)
-      .setName("Setting #1")
-      .setDesc("It's a secret")
-      .addText((text) =>
-        text
+      .setName("Wikipedia Extract Template")
+      .setDesc(
+        "Set markdown template for extract to be inserted. Available variables are {{title}}, {{text}}, and {{URL}}."
+      )
+      .addTextArea((textarea) =>
+        textarea
           .setPlaceholder("Enter your secret")
           .setValue("")
           .onChange(async (value) => {
-            console.log("Secret: " + value);
-            this.plugin.settings.mySetting = value;
+            console.log(value);
+            this.plugin.settings.template = value;
             await this.plugin.saveSettings();
           })
       );
