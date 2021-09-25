@@ -12,6 +12,7 @@ import {
 interface WikiExtract {
   title: string;
   text: string;
+  url: string;
 }
 
 interface MyPluginSettings {
@@ -22,48 +23,93 @@ const DEFAULT_SETTINGS: MyPluginSettings = {
   template: "{{text}}",
 };
 
-const apiUrl =
-  "https://en.wikipedia.org/w/api.php?format=json&action=query&prop=extracts&explaintext=1&origin=*&titles=";
-
+const extractApiUrl =
+  "https://en.wikipedia.org/w/api.php?" +
+  "format=json&action=query&prop=extracts&explaintext=1&redirects&origin=*&titles=";
 export default class MyPlugin extends Plugin {
   settings: MyPluginSettings;
 
-  parseResponse(json: any): WikiExtract[] {
+  getUrl(title: string): string {
+    return `https://en.wikipedia.org/wiki/${encodeURI(title)}`;
+  }
+
+  formatExtractText(extract: WikiExtract): string {
+    const { text, title } = extract;
+    return (
+      "> " +
+      text
+        .split("==")[0]
+        .trim()
+        .replace(title, `**${title}**`)
+        .split("\n")
+        .join("\n>\n> ")
+    );
+  }
+
+  handleNotFound(searchTerm: string) {
+    new Notice(`${searchTerm} not found on Wikipedia.`);
+  }
+
+  parseResponse(json: any): WikiExtract | undefined {
     const pages = json.query.pages;
-    const extracts: WikiExtract[] = Object.keys(pages).map((key) => {
+    const pageKeys = Object.keys(pages);
+    console.log(pageKeys);
+    if (pageKeys.includes("-1")) {
+      return undefined;
+    }
+    const extracts: WikiExtract[] = pageKeys.map((key) => {
       const page = pages[key];
       const extract: WikiExtract = {
         title: page.title,
         text: page.extract,
+        url: this.getUrl(page.title),
       };
       return extract;
     });
-    return extracts;
+    return extracts[0];
   }
 
   formatExtractInsert(extract: WikiExtract): string {
-    const formattedText = extract.text.split("==")[0].trim();
+    console.log(extract.text);
+    const formattedText = this.formatExtractText(extract);
     const template = this.settings.template;
     const formattedTemplate = template
       .replace("{{text}}", formattedText)
       .replace("{{title}}", extract.title)
-      .replace("{{url}}", "https://wikipedia.org/Obsidian");
+      .replace("{{url}}", extract.url);
     return formattedTemplate;
   }
 
-  async getWikipediaText(title: string): Promise<WikiExtract> {
+  async getWikipediaText(title: string): Promise<WikiExtract | undefined> {
     console.log("getting wiki response");
-    const url = apiUrl + encodeURIComponent(title);
+    const url = extractApiUrl + encodeURIComponent(title);
     const json = await fetch(url).then((response) => response.json());
-    const extracts = this.parseResponse(json);
-    return extracts[0];
+    const extract = this.parseResponse(json);
+    return extract;
+  }
+
+  async pasteIntoEditor(searchTerm: string) {
+    const extract: WikiExtract = await this.getWikipediaText(searchTerm);
+    if (!extract) {
+      this.handleNotFound(searchTerm);
+      return;
+    }
+    const editor = this.getEditor();
+    editor.replaceSelection(this.formatExtractInsert(extract));
   }
 
   async getWikipediaTextForActiveFile() {
-    const activeNoteTitle = await this.app.workspace.getActiveFile().basename;
-    const extract: WikiExtract = await this.getWikipediaText(activeNoteTitle);
-    const editor = this.getEditor();
-    editor.replaceSelection(this.formatExtractInsert(extract));
+    const searchTerm = await this.app.workspace.getActiveFile().basename;
+    await this.pasteIntoEditor(searchTerm);
+  }
+
+  async getWikipediaTextForSearchTerm() {
+    const leaf = this.app.workspace.activeLeaf;
+    if (leaf) {
+      new SearchModel(this.app).open();
+    }
+    const searchTerm = "North America";
+    await this.pasteIntoEditor(searchTerm);
   }
 
   async onload() {
@@ -73,8 +119,14 @@ export default class MyPlugin extends Plugin {
 
     this.addCommand({
       id: "wikipedia-get-active-note-title",
-      name: "Wikipedia: Get Active Note Title",
+      name: "Get Active Note Title",
       callback: () => this.getWikipediaTextForActiveFile(),
+    });
+
+    this.addCommand({
+      id: "wikipedia-get-search-term",
+      name: "Get Search Term",
+      callback: () => this.getWikipediaTextForSearchTerm(),
     });
 
     this.addSettingTab(new SampleSettingTab(this.app, this));
@@ -99,6 +151,22 @@ export default class MyPlugin extends Plugin {
   }
 }
 
+class SearchModel extends Modal {
+  constructor(app: App) {
+    super(app);
+  }
+
+  onOpen() {
+    let { contentEl } = this;
+    contentEl.setText("Enter Search Term:");
+  }
+
+  onClose() {
+    let { contentEl } = this;
+    contentEl.empty();
+  }
+}
+
 class SampleSettingTab extends PluginSettingTab {
   plugin: MyPlugin;
 
@@ -117,12 +185,11 @@ class SampleSettingTab extends PluginSettingTab {
     new Setting(containerEl)
       .setName("Wikipedia Extract Template")
       .setDesc(
-        "Set markdown template for extract to be inserted. Available variables are {{title}}, {{text}}, and {{URL}}."
+        "Set markdown template for extract to be inserted. Available template variables are {{title}}, {{text}}, and {{url}}."
       )
       .addTextArea((textarea) =>
         textarea
-          .setPlaceholder("Enter your secret")
-          .setValue("")
+          .setValue(this.plugin.settings.template)
           .onChange(async (value) => {
             console.log(value);
             this.plugin.settings.template = value;
