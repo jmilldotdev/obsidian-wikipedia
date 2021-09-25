@@ -26,6 +26,8 @@ const DEFAULT_SETTINGS: MyPluginSettings = {
 const extractApiUrl =
   "https://en.wikipedia.org/w/api.php?" +
   "format=json&action=query&prop=extracts&explaintext=1&redirects&origin=*&titles=";
+
+const disambiguationIdentifier = "may refer to:";
 export default class MyPlugin extends Plugin {
   settings: MyPluginSettings;
 
@@ -50,10 +52,16 @@ export default class MyPlugin extends Plugin {
     new Notice(`${searchTerm} not found on Wikipedia.`);
   }
 
+  hasDisambiguation(extract: WikiExtract) {
+    if (extract.text.includes(disambiguationIdentifier)) {
+      return true;
+    }
+    return false;
+  }
+
   parseResponse(json: any): WikiExtract | undefined {
     const pages = json.query.pages;
     const pageKeys = Object.keys(pages);
-    console.log(pageKeys);
     if (pageKeys.includes("-1")) {
       return undefined;
     }
@@ -70,7 +78,6 @@ export default class MyPlugin extends Plugin {
   }
 
   formatExtractInsert(extract: WikiExtract): string {
-    console.log(extract.text);
     const formattedText = this.formatExtractText(extract);
     const template = this.settings.template;
     const formattedTemplate = template
@@ -81,7 +88,6 @@ export default class MyPlugin extends Plugin {
   }
 
   async getWikipediaText(title: string): Promise<WikiExtract | undefined> {
-    console.log("getting wiki response");
     const url = extractApiUrl + encodeURIComponent(title);
     const json = await fetch(url).then((response) => response.json());
     const extract = this.parseResponse(json);
@@ -89,10 +95,20 @@ export default class MyPlugin extends Plugin {
   }
 
   async pasteIntoEditor(searchTerm: string) {
-    const extract: WikiExtract = await this.getWikipediaText(searchTerm);
+    let extract: WikiExtract = await this.getWikipediaText(searchTerm);
     if (!extract) {
       this.handleNotFound(searchTerm);
       return;
+    }
+    if (this.hasDisambiguation(extract)) {
+      new Notice(
+        `Disambiguation found for ${searchTerm}. Choosing first result.`
+      );
+      const newSearchTerm = extract.text
+        .split(disambiguationIdentifier)[1]
+        .trim()
+        .split(",")[0];
+      extract = await this.getWikipediaText(newSearchTerm);
     }
     const editor = this.getEditor();
     editor.replaceSelection(this.formatExtractInsert(extract));
@@ -103,18 +119,7 @@ export default class MyPlugin extends Plugin {
     await this.pasteIntoEditor(searchTerm);
   }
 
-  async getWikipediaTextForSearchTerm() {
-    const leaf = this.app.workspace.activeLeaf;
-    if (leaf) {
-      new SearchModel(this.app).open();
-    }
-    const searchTerm = "North America";
-    await this.pasteIntoEditor(searchTerm);
-  }
-
   async onload() {
-    console.log("loading plugin");
-
     await this.loadSettings();
 
     this.addCommand({
@@ -123,17 +128,7 @@ export default class MyPlugin extends Plugin {
       callback: () => this.getWikipediaTextForActiveFile(),
     });
 
-    this.addCommand({
-      id: "wikipedia-get-search-term",
-      name: "Get Search Term",
-      callback: () => this.getWikipediaTextForSearchTerm(),
-    });
-
     this.addSettingTab(new SampleSettingTab(this.app, this));
-  }
-
-  onunload() {
-    console.log("unloading plugin");
   }
 
   async loadSettings() {
@@ -148,22 +143,6 @@ export default class MyPlugin extends Plugin {
     let activeLeaf = this.app.workspace.getActiveViewOfType(MarkdownView);
     if (activeLeaf == null) return;
     return activeLeaf.editor;
-  }
-}
-
-class SearchModel extends Modal {
-  constructor(app: App) {
-    super(app);
-  }
-
-  onOpen() {
-    let { contentEl } = this;
-    contentEl.setText("Enter Search Term:");
-  }
-
-  onClose() {
-    let { contentEl } = this;
-    contentEl.empty();
   }
 }
 
@@ -191,7 +170,6 @@ class SampleSettingTab extends PluginSettingTab {
         textarea
           .setValue(this.plugin.settings.template)
           .onChange(async (value) => {
-            console.log(value);
             this.plugin.settings.template = value;
             await this.plugin.saveSettings();
           })
