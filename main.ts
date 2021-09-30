@@ -19,10 +19,16 @@ interface WikiExtract {
 
 interface MyPluginSettings {
   template: string;
+  shouldUseParagraphTemplate: boolean;
+  shouldBoldTitle: boolean;
+  paragraphTemplate: string;
 }
 
 const DEFAULT_SETTINGS: MyPluginSettings = {
-  template: `{{text}}`,
+  template: `{{text}}\n> [Wikipedia]({{url}})`,
+  shouldUseParagraphTemplate: true,
+  shouldBoldTitle: true,
+  paragraphTemplate: `> {{paragraphText}}\n>\n`,
 };
 
 const extractApiUrl =
@@ -39,15 +45,25 @@ export default class MyPlugin extends Plugin {
 
   formatExtractText(extract: WikiExtract): string {
     const { text, title } = extract;
-    return (
-      "> " +
-      text
-        .split("==")[0]
-        .trim()
-        .replace(title, `**${title}**`)
-        .split("\n")
-        .join("\n>\n> ")
-    );
+    let formattedText: string = "";
+    if (this.settings.shouldUseParagraphTemplate) {
+      const split = text.split("==")[0].trim().split("\n");
+      formattedText = split
+        .map((paragraph) =>
+          this.settings.paragraphTemplate.replace(
+            "{{paragraphText}}",
+            paragraph
+          )
+        )
+        .join("")
+        .trim();
+    } else {
+      formattedText = text.split("==")[0].trim();
+    }
+    if (this.settings.shouldBoldTitle) {
+      formattedText = formattedText.replace(title, `**${title}**`);
+    }
+    return formattedText;
   }
 
   handleNotFound(searchTerm: string) {
@@ -233,6 +249,50 @@ class SampleSettingTab extends PluginSettingTab {
           .setValue(this.plugin.settings.template)
           .onChange(async (value) => {
             this.plugin.settings.template = value;
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName("Bold Title?")
+      .setDesc(
+        "If set to true, the first instance of the page title will be **bolded**"
+      )
+      .addToggle((toggle) =>
+        toggle
+          .setValue(this.plugin.settings.shouldBoldTitle)
+          .onChange(async (value) => {
+            this.plugin.settings.shouldBoldTitle = value;
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName("Use paragraph template?")
+      .setDesc(
+        "If set to true, the paragraph template will be inserted for each paragraph of text for {{text}} in main template."
+      )
+      .addToggle((toggle) =>
+        toggle
+          .setValue(this.plugin.settings.shouldUseParagraphTemplate)
+          .onChange(async (value) => {
+            this.plugin.settings.shouldUseParagraphTemplate = value;
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName("Paragraph Template")
+      .setDesc(
+        `Set markdown template for extract paragraphs to be inserted.\n
+        Available template variables are: {{paragraph}}
+        `
+      )
+      .addTextArea((textarea) =>
+        textarea
+          .setValue(this.plugin.settings.paragraphTemplate)
+          .onChange(async (value) => {
+            this.plugin.settings.paragraphTemplate = value;
             await this.plugin.saveSettings();
           })
       );
