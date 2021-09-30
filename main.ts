@@ -7,6 +7,8 @@ import {
   Setting,
   Editor,
   MarkdownView,
+  TextAreaComponent,
+  TextComponent,
 } from "obsidian";
 
 interface WikiExtract {
@@ -20,7 +22,7 @@ interface MyPluginSettings {
 }
 
 const DEFAULT_SETTINGS: MyPluginSettings = {
-  template: "{{text}}",
+  template: `{{text}}`,
 };
 
 const extractApiUrl =
@@ -119,13 +121,23 @@ export default class MyPlugin extends Plugin {
     await this.pasteIntoEditor(searchTerm);
   }
 
+  async getWikipediaTextForSearchTerm() {
+    new SearchModal(this.app, this).open();
+  }
+
   async onload() {
     await this.loadSettings();
 
     this.addCommand({
       id: "wikipedia-get-active-note-title",
-      name: "Get Active Note Title",
+      name: "Get Wikipedia for Active Note Title",
       callback: () => this.getWikipediaTextForActiveFile(),
+    });
+
+    this.addCommand({
+      id: "wikipedia-get-search-term",
+      name: "Get Wikipedia for Search Term",
+      callback: () => this.getWikipediaTextForSearchTerm(),
     });
 
     this.addSettingTab(new SampleSettingTab(this.app, this));
@@ -143,6 +155,54 @@ export default class MyPlugin extends Plugin {
     let activeLeaf = this.app.workspace.getActiveViewOfType(MarkdownView);
     if (activeLeaf == null) return;
     return activeLeaf.editor;
+  }
+}
+
+class SearchModal extends Modal {
+  searchTerm: string;
+  plugin: MyPlugin;
+
+  constructor(app: App, plugin: MyPlugin) {
+    super(app);
+    this.plugin = plugin;
+  }
+
+  onOpen() {
+    let { contentEl } = this;
+
+    contentEl.createEl("h2", { text: "Enter Search Term:" });
+
+    const inputs = contentEl.createDiv("inputs");
+    const searchInput = new TextComponent(inputs).onChange((searchTerm) => {
+      this.searchTerm = searchTerm;
+    });
+    searchInput.inputEl.focus();
+    searchInput.inputEl.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        this.close();
+      }
+    });
+
+    const controls = contentEl.createDiv("controls");
+    const searchButton = controls.createEl("button", {
+      text: "Search",
+      cls: "mod-cta",
+      attr: {
+        autofocus: true,
+      },
+    });
+    searchButton.addEventListener("click", this.close.bind(this));
+    const cancelButton = controls.createEl("button", { text: "Cancel" });
+    cancelButton.addEventListener("click", this.close.bind(this));
+  }
+
+  async onClose() {
+    let { contentEl } = this;
+
+    contentEl.empty();
+    if (this.searchTerm) {
+      await this.plugin.pasteIntoEditor(this.searchTerm);
+    }
   }
 }
 
@@ -164,7 +224,9 @@ class SampleSettingTab extends PluginSettingTab {
     new Setting(containerEl)
       .setName("Wikipedia Extract Template")
       .setDesc(
-        "Set markdown template for extract to be inserted. Available template variables are {{title}}, {{text}}, and {{url}}."
+        `Set markdown template for extract to be inserted.\n
+        Available template variables are {{title}}, {{paragraph}}, and {{url}}.
+        `
       )
       .addTextArea((textarea) =>
         textarea
