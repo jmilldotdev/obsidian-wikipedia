@@ -19,7 +19,7 @@ interface WikiExtract {
 interface MyPluginSettings {
   template: string;
   shouldUseParagraphTemplate: boolean;
-  shouldBoldTitle: boolean;
+  shouldBoldSearchTerm: boolean;
   paragraphTemplate: string;
   language: string;
 }
@@ -27,7 +27,7 @@ interface MyPluginSettings {
 const DEFAULT_SETTINGS: MyPluginSettings = {
   template: `{{text}}\n> [Wikipedia]({{url}})`,
   shouldUseParagraphTemplate: true,
-  shouldBoldTitle: true,
+  shouldBoldSearchTerm: true,
   paragraphTemplate: `> {{paragraphText}}\n>\n`,
   language: "en",
 };
@@ -39,14 +39,18 @@ const disambiguationIdentifier = "may refer to:";
 export default class MyPlugin extends Plugin {
   settings: MyPluginSettings;
 
+  getLanguage(): string {
+    return this.settings.language ? this.settings.language : "en";
+  }
+
   getUrl(title: string): string {
-    return `https://${this.settings.language}.wikipedia.org/wiki/${encodeURI(
+    return `https://${this.getLanguage()}.wikipedia.org/wiki/${encodeURI(
       title
     )}`;
   }
 
   getApiUrl(): string {
-    return `https://${this.settings.language}.` + extractApiUrl;
+    return `https://${this.getLanguage()}.` + extractApiUrl;
   }
 
   formatExtractText(extract: WikiExtract, searchTerm: string): string {
@@ -66,7 +70,7 @@ export default class MyPlugin extends Plugin {
     } else {
       formattedText = text.split("==")[0].trim();
     }
-    if (this.settings.shouldBoldTitle) {
+    if (this.settings.shouldBoldSearchTerm) {
       const pattern = new RegExp(searchTerm, "i");
       formattedText = formattedText.replace(pattern, `**${searchTerm}**`);
     }
@@ -120,7 +124,12 @@ export default class MyPlugin extends Plugin {
     const url = this.getApiUrl() + encodeURIComponent(title);
     const json = await fetch(url)
       .then((response) => response.json())
-      .catch(() => new Notice('Failed to get Wikipedia. Check your internet connection or language prefix.'));
+      .catch(
+        () =>
+          new Notice(
+            "Failed to get Wikipedia. Check your internet connection or language prefix."
+          )
+      );
     const extract = this.parseResponse(json);
     return extract;
   }
@@ -260,7 +269,7 @@ class SampleSettingTab extends PluginSettingTab {
     containerEl.createEl("h2", { text: "Obsidian Wikipedia" });
 
     new Setting(containerEl)
-      .setName("Wikipedia Language")
+      .setName("Wikipedia Language Prefix")
       .setDesc(`Choose Wikipedia language prefix to use (ex. en for English)`)
       .addText((textField) => {
         textField
@@ -288,15 +297,15 @@ class SampleSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
-      .setName("Bold Title?")
+      .setName("Bold Search Term?")
       .setDesc(
-        "If set to true, the first instance of the page title will be **bolded**"
+        "If set to true, the first instance of the search term will be **bolded**"
       )
       .addToggle((toggle) =>
         toggle
-          .setValue(this.plugin.settings.shouldBoldTitle)
+          .setValue(this.plugin.settings.shouldBoldSearchTerm)
           .onChange(async (value) => {
-            this.plugin.settings.shouldBoldTitle = value;
+            this.plugin.settings.shouldBoldSearchTerm = value;
             await this.plugin.saveSettings();
           })
       );
