@@ -7,7 +7,6 @@ import {
   Setting,
   Editor,
   MarkdownView,
-  TextAreaComponent,
   TextComponent,
 } from "obsidian";
 
@@ -22,6 +21,7 @@ interface MyPluginSettings {
   shouldUseParagraphTemplate: boolean;
   shouldBoldTitle: boolean;
   paragraphTemplate: string;
+  language: string;
 }
 
 const DEFAULT_SETTINGS: MyPluginSettings = {
@@ -29,22 +29,28 @@ const DEFAULT_SETTINGS: MyPluginSettings = {
   shouldUseParagraphTemplate: true,
   shouldBoldTitle: true,
   paragraphTemplate: `> {{paragraphText}}\n>\n`,
+  language: "en",
 };
 
 const extractApiUrl =
-  "https://en.wikipedia.org/w/api.php?" +
-  "format=json&action=query&prop=extracts&explaintext=1&redirects&origin=*&titles=";
+  "wikipedia.org/w/api.php?format=json&action=query&prop=extracts&explaintext=1&redirects&origin=*&titles=";
 
 const disambiguationIdentifier = "may refer to:";
 export default class MyPlugin extends Plugin {
   settings: MyPluginSettings;
 
   getUrl(title: string): string {
-    return `https://en.wikipedia.org/wiki/${encodeURI(title)}`;
+    return `https://${this.settings.language}.wikipedia.org/wiki/${encodeURI(
+      title
+    )}`;
   }
 
-  formatExtractText(extract: WikiExtract): string {
-    const { text, title } = extract;
+  getApiUrl(): string {
+    return `https://${this.settings.language}.` + extractApiUrl;
+  }
+
+  formatExtractText(extract: WikiExtract, searchTerm: string): string {
+    const text = extract.text;
     let formattedText: string = "";
     if (this.settings.shouldUseParagraphTemplate) {
       const split = text.split("==")[0].trim().split("\n");
@@ -61,13 +67,18 @@ export default class MyPlugin extends Plugin {
       formattedText = text.split("==")[0].trim();
     }
     if (this.settings.shouldBoldTitle) {
-      formattedText = formattedText.replace(title, `**${title}**`);
+      const pattern = new RegExp(searchTerm, "i");
+      formattedText = formattedText.replace(pattern, `**${searchTerm}**`);
     }
     return formattedText;
   }
 
   handleNotFound(searchTerm: string) {
     new Notice(`${searchTerm} not found on Wikipedia.`);
+  }
+
+  handleCouldntResolveDisambiguation() {
+    new Notice(`Could not automatically resolve disambiguation.`);
   }
 
   hasDisambiguation(extract: WikiExtract) {
@@ -95,19 +106,21 @@ export default class MyPlugin extends Plugin {
     return extracts[0];
   }
 
-  formatExtractInsert(extract: WikiExtract): string {
-    const formattedText = this.formatExtractText(extract);
+  formatExtractInsert(extract: WikiExtract, searchTerm: string): string {
+    const formattedText = this.formatExtractText(extract, searchTerm);
     const template = this.settings.template;
     const formattedTemplate = template
       .replace("{{text}}", formattedText)
-      .replace("{{title}}", extract.title)
+      .replace("{{searchTerm}}", searchTerm)
       .replace("{{url}}", extract.url);
     return formattedTemplate;
   }
 
   async getWikipediaText(title: string): Promise<WikiExtract | undefined> {
-    const url = extractApiUrl + encodeURIComponent(title);
-    const json = await fetch(url).then((response) => response.json());
+    const url = this.getApiUrl() + encodeURIComponent(title);
+    const json = await fetch(url)
+      .then((response) => response.json())
+      .catch(() => new Notice('Failed to get Wikipedia. Check your internet connection or language prefix.'));
     const extract = this.parseResponse(json);
     return extract;
   }
@@ -122,14 +135,23 @@ export default class MyPlugin extends Plugin {
       new Notice(
         `Disambiguation found for ${searchTerm}. Choosing first result.`
       );
+      console.log(extract);
       const newSearchTerm = extract.text
         .split(disambiguationIdentifier)[1]
         .trim()
-        .split(",")[0];
+        .split(",")[0]
+        .split("==")
+        .pop()
+        .trim();
+      console.log(newSearchTerm);
       extract = await this.getWikipediaText(newSearchTerm);
+      if (!extract) {
+        this.handleCouldntResolveDisambiguation();
+        return;
+      }
     }
     const editor = this.getEditor();
-    editor.replaceSelection(this.formatExtractInsert(extract));
+    editor.replaceSelection(this.formatExtractInsert(extract, searchTerm));
   }
 
   async getWikipediaTextForActiveFile() {
@@ -238,10 +260,22 @@ class SampleSettingTab extends PluginSettingTab {
     containerEl.createEl("h2", { text: "Obsidian Wikipedia" });
 
     new Setting(containerEl)
+      .setName("Wikipedia Language")
+      .setDesc(`Choose Wikipedia language prefix to use (ex. en for English)`)
+      .addText((textField) => {
+        textField
+          .setValue(this.plugin.settings.language)
+          .onChange(async (value) => {
+            this.plugin.settings.language = value;
+            await this.plugin.saveSettings();
+          });
+      });
+
+    new Setting(containerEl)
       .setName("Wikipedia Extract Template")
       .setDesc(
         `Set markdown template for extract to be inserted.\n
-        Available template variables are {{title}}, {{paragraph}}, and {{url}}.
+        Available template variables are {{text}}, {{searchTerm}} and {{url}}.
         `
       )
       .addTextArea((textarea) =>
@@ -285,7 +319,7 @@ class SampleSettingTab extends PluginSettingTab {
       .setName("Paragraph Template")
       .setDesc(
         `Set markdown template for extract paragraphs to be inserted.\n
-        Available template variables are: {{paragraph}}
+        Available template variables are: {{paragraphText}}
         `
       )
       .addTextArea((textarea) =>
