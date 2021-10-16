@@ -166,9 +166,12 @@ export default class WikipediaPlugin extends Plugin {
   }
 
   async getWikipediaTextForActiveFile(editor: Editor) {
-    const searchTerm = await this.app.workspace.getActiveFile().basename;
-    if (searchTerm) {
-      await this.pasteIntoEditor(editor, searchTerm);
+    const activeFile = await this.app.workspace.getActiveFile();
+    if (activeFile) {
+      const searchTerm = activeFile.basename;
+      if (searchTerm) {
+        await this.pasteIntoEditor(editor, searchTerm);
+      }
     }
   }
 
