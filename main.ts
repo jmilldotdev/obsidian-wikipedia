@@ -8,15 +8,17 @@ import {
   Editor,
   MarkdownView,
   TextComponent,
+  RequestParam,
+  request,
 } from "obsidian";
 
-interface WikiExtract {
+interface WikipediaExtract {
   title: string;
   text: string;
   url: string;
 }
 
-interface MyPluginSettings {
+interface WikipediaPluginSettings {
   template: string;
   shouldUseParagraphTemplate: boolean;
   shouldBoldSearchTerm: boolean;
@@ -24,7 +26,7 @@ interface MyPluginSettings {
   language: string;
 }
 
-const DEFAULT_SETTINGS: MyPluginSettings = {
+const DEFAULT_SETTINGS: WikipediaPluginSettings = {
   template: `{{text}}\n> [Wikipedia]({{url}})`,
   shouldUseParagraphTemplate: true,
   shouldBoldSearchTerm: true,
@@ -36,8 +38,8 @@ const extractApiUrl =
   "wikipedia.org/w/api.php?format=json&action=query&prop=extracts&explaintext=1&redirects&origin=*&titles=";
 
 const disambiguationIdentifier = "may refer to:";
-export default class MyPlugin extends Plugin {
-  settings: MyPluginSettings;
+export default class WikipediaPlugin extends Plugin {
+  settings: WikipediaPluginSettings;
 
   getLanguage(): string {
     return this.settings.language ? this.settings.language : "en";
@@ -53,7 +55,7 @@ export default class MyPlugin extends Plugin {
     return `https://${this.getLanguage()}.` + extractApiUrl;
   }
 
-  formatExtractText(extract: WikiExtract, searchTerm: string): string {
+  formatExtractText(extract: WikipediaExtract, searchTerm: string): string {
     const text = extract.text;
     let formattedText: string = "";
     if (this.settings.shouldUseParagraphTemplate) {
@@ -85,22 +87,22 @@ export default class MyPlugin extends Plugin {
     new Notice(`Could not automatically resolve disambiguation.`);
   }
 
-  hasDisambiguation(extract: WikiExtract) {
+  hasDisambiguation(extract: WikipediaExtract) {
     if (extract.text.includes(disambiguationIdentifier)) {
       return true;
     }
     return false;
   }
 
-  parseResponse(json: any): WikiExtract | undefined {
+  parseResponse(json: any): WikipediaExtract | undefined {
     const pages = json.query.pages;
     const pageKeys = Object.keys(pages);
     if (pageKeys.includes("-1")) {
       return undefined;
     }
-    const extracts: WikiExtract[] = pageKeys.map((key) => {
+    const extracts: WikipediaExtract[] = pageKeys.map((key) => {
       const page = pages[key];
-      const extract: WikiExtract = {
+      const extract: WikipediaExtract = {
         title: page.title,
         text: page.extract,
         url: this.getUrl(page.title),
@@ -110,7 +112,7 @@ export default class MyPlugin extends Plugin {
     return extracts[0];
   }
 
-  formatExtractInsert(extract: WikiExtract, searchTerm: string): string {
+  formatExtractInsert(extract: WikipediaExtract, searchTerm: string): string {
     const formattedText = this.formatExtractText(extract, searchTerm);
     const template = this.settings.template;
     const formattedTemplate = template
@@ -120,22 +122,25 @@ export default class MyPlugin extends Plugin {
     return formattedTemplate;
   }
 
-  async getWikipediaText(title: string): Promise<WikiExtract | undefined> {
+  async getWikipediaText(title: string): Promise<WikipediaExtract | undefined> {
     const url = this.getApiUrl() + encodeURIComponent(title);
-    const json = await fetch(url)
-      .then((response) => response.json())
+    const requestParam: RequestParam = {
+      url: url,
+    };
+    const resp = await request(requestParam)
+      .then((r) => JSON.parse(r))
       .catch(
         () =>
           new Notice(
             "Failed to get Wikipedia. Check your internet connection or language prefix."
           )
       );
-    const extract = this.parseResponse(json);
+    const extract = this.parseResponse(resp);
     return extract;
   }
 
-  async pasteIntoEditor(searchTerm: string) {
-    let extract: WikiExtract = await this.getWikipediaText(searchTerm);
+  async pasteIntoEditor(editor: Editor, searchTerm: string) {
+    let extract: WikipediaExtract = await this.getWikipediaText(searchTerm);
     if (!extract) {
       this.handleNotFound(searchTerm);
       return;
@@ -144,7 +149,6 @@ export default class MyPlugin extends Plugin {
       new Notice(
         `Disambiguation found for ${searchTerm}. Choosing first result.`
       );
-      console.log(extract);
       const newSearchTerm = extract.text
         .split(disambiguationIdentifier)[1]
         .trim()
@@ -152,24 +156,24 @@ export default class MyPlugin extends Plugin {
         .split("==")
         .pop()
         .trim();
-      console.log(newSearchTerm);
       extract = await this.getWikipediaText(newSearchTerm);
       if (!extract) {
         this.handleCouldntResolveDisambiguation();
         return;
       }
     }
-    const editor = this.getEditor();
     editor.replaceSelection(this.formatExtractInsert(extract, searchTerm));
   }
 
-  async getWikipediaTextForActiveFile() {
+  async getWikipediaTextForActiveFile(editor: Editor) {
     const searchTerm = await this.app.workspace.getActiveFile().basename;
-    await this.pasteIntoEditor(searchTerm);
+    if (searchTerm) {
+      await this.pasteIntoEditor(editor, searchTerm);
+    }
   }
 
-  async getWikipediaTextForSearchTerm() {
-    new SearchModal(this.app, this).open();
+  async getWikipediaTextForSearchTerm(editor: Editor) {
+    new WikipediaSearchModal(this.app, this, editor).open();
   }
 
   async onload() {
@@ -178,16 +182,18 @@ export default class MyPlugin extends Plugin {
     this.addCommand({
       id: "wikipedia-get-active-note-title",
       name: "Get Wikipedia for Active Note Title",
-      callback: () => this.getWikipediaTextForActiveFile(),
+      editorCallback: (editor: Editor) =>
+        this.getWikipediaTextForActiveFile(editor),
     });
 
     this.addCommand({
       id: "wikipedia-get-search-term",
       name: "Get Wikipedia for Search Term",
-      callback: () => this.getWikipediaTextForSearchTerm(),
+      editorCallback: (editor: Editor) =>
+        this.getWikipediaTextForSearchTerm(editor),
     });
 
-    this.addSettingTab(new SampleSettingTab(this.app, this));
+    this.addSettingTab(new WikipediaSettingTab(this.app, this));
   }
 
   async loadSettings() {
@@ -197,21 +203,17 @@ export default class MyPlugin extends Plugin {
   async saveSettings() {
     await this.saveData(this.settings);
   }
-
-  private getEditor(): Editor {
-    let activeLeaf = this.app.workspace.getActiveViewOfType(MarkdownView);
-    if (activeLeaf == null) return;
-    return activeLeaf.editor;
-  }
 }
 
-class SearchModal extends Modal {
+class WikipediaSearchModal extends Modal {
   searchTerm: string;
-  plugin: MyPlugin;
+  plugin: WikipediaPlugin;
+  editor: Editor;
 
-  constructor(app: App, plugin: MyPlugin) {
+  constructor(app: App, plugin: WikipediaPlugin, editor: Editor) {
     super(app);
     this.plugin = plugin;
+    this.editor = editor;
   }
 
   onOpen() {
@@ -248,15 +250,15 @@ class SearchModal extends Modal {
 
     contentEl.empty();
     if (this.searchTerm) {
-      await this.plugin.pasteIntoEditor(this.searchTerm);
+      await this.plugin.pasteIntoEditor(this.editor, this.searchTerm);
     }
   }
 }
 
-class SampleSettingTab extends PluginSettingTab {
-  plugin: MyPlugin;
+class WikipediaSettingTab extends PluginSettingTab {
+  plugin: WikipediaPlugin;
 
-  constructor(app: App, plugin: MyPlugin) {
+  constructor(app: App, plugin: WikipediaPlugin) {
     super(app, plugin);
     this.plugin = plugin;
   }

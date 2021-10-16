@@ -1,6 +1,6 @@
 {
   "name": "obsidian-wikipedia",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Grabs information from Wikipedia for a topic and brings it into Obsidian notes",
   "main": "main.js",
   "scripts": {
