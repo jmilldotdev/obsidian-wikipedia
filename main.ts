@@ -1,16 +1,17 @@
 import {
   App,
+  Editor,
   Modal,
   Notice,
   Plugin,
   PluginSettingTab,
-  Setting,
-  Editor,
-  MarkdownView,
-  TextComponent,
-  RequestParam,
   request,
+  RequestParam,
+  Setting,
+  TextComponent,
 } from "obsidian";
+import { parse } from "node-html-parser";
+import TurndownService from "turndown";
 
 interface WikipediaExtract {
   title: string;
@@ -24,6 +25,7 @@ interface WikipediaPluginSettings {
   shouldBoldSearchTerm: boolean;
   paragraphTemplate: string;
   language: string;
+  fetchMarkdown: boolean;
 }
 
 const DEFAULT_SETTINGS: WikipediaPluginSettings = {
@@ -32,12 +34,55 @@ const DEFAULT_SETTINGS: WikipediaPluginSettings = {
   shouldBoldSearchTerm: true,
   paragraphTemplate: `> {{paragraphText}}\n>\n`,
   language: "en",
+  fetchMarkdown: false,
 };
 
 const extractApiUrl =
   "wikipedia.org/w/api.php?format=json&action=query&prop=extracts&explaintext=1&redirects&origin=*&titles=";
 
 const disambiguationIdentifier = "may refer to:";
+
+async function extractWikiMarkdown(language: string, query: string): Promise<string> {
+  const acceptLanguage = language == 'zh' ? 'zh-cn' : undefined
+  const res = await request({
+    url: `https://${language}.wikipedia.org/wiki/${query}`,
+    headers: {
+      'Accept-Language': acceptLanguage
+    }
+  })
+
+  const parsedDocument = parse(res);
+  const content = parsedDocument.querySelector('div[id=mw-content-text]')
+  content.querySelector('div[class~=navigation-not-searchable]')?.remove()
+  content.querySelector('table[class~=box-Unreferenced]')?.remove()
+  content.querySelector('table[class~=infobox]')?.remove()
+  content.querySelector('table[role=presentation]')?.remove()
+  content.querySelectorAll('span[class~=mw-editsection]')?.forEach(v => v.remove())
+  content.querySelectorAll('noscript')?.forEach(v => v.remove())
+  content.querySelectorAll('sup[class~=reference]')?.forEach(v => v.remove())
+  content.querySelector('div[class=printfooter]')?.remove()
+  try {
+    while (true) {
+      content.querySelector('div[id=toc]').nextElementSibling.remove()
+    }
+  } catch (e) {
+
+  }
+  content.querySelector('div[id=toc]')?.remove()
+
+
+  const turndownService = new TurndownService({
+    headingStyle: 'atx',
+    codeBlockStyle: 'fenced',
+    fence: '```'
+  });
+  let txt = turndownService.turndown(content.innerHTML);
+
+  txt = txt.replace(/\(\/\/upload.wikimedia.org/g, '(https://upload.wikimedia.org')
+  txt = txt.replace(/\(\//g, `(https://${language}.wikipedia.org/`)
+  return txt
+}
+
 export default class WikipediaPlugin extends Plugin {
   settings: WikipediaPluginSettings;
 
@@ -136,6 +181,9 @@ export default class WikipediaPlugin extends Plugin {
           )
       );
     const extract = this.parseResponse(resp);
+    if (this.settings.fetchMarkdown) {
+      extract.text = await extractWikiMarkdown(this.getLanguage(), title)
+    }
     return extract;
   }
 
@@ -341,6 +389,20 @@ class WikipediaSettingTab extends PluginSettingTab {
           .setValue(this.plugin.settings.paragraphTemplate)
           .onChange(async (value) => {
             this.plugin.settings.paragraphTemplate = value;
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName("Fetch Wiki as Markdown?")
+      .setDesc(
+        "If set to true, the wiki content will be fetched as markdown."
+      )
+      .addToggle((toggle) =>
+        toggle
+          .setValue(this.plugin.settings.fetchMarkdown)
+          .onChange(async (value) => {
+            this.plugin.settings.fetchMarkdown = value;
             await this.plugin.saveSettings();
           })
       );
